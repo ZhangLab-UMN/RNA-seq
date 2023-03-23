@@ -1,0 +1,97 @@
+# Written by Zachary Myers
+# R Function for calling differential expression from multiple raw reads
+
+###################### ZM July 21, 2022 ######################
+
+## Input file format examples:
+# res <- readRDS("00.raw.rds")
+# Zm01.B73.sIDs <- data.frame(SampleID=c("s001","s002","s003","s004","s005","s006"))
+# Zm01.B73.sID.cond <- DataFrame(treatment=factor(c("C","C","C","H","H","H")))
+##
+library(tidyverse)
+library(DESeq2)
+library(EnhancedVolcano)
+
+if(!require("BiocManager", quietly = TRUE))
+  install.packages("BiocManager")
+BiocManager::install("EnhancedVolcano")
+
+wt.sIDs <- data.frame(SampleID= c("s007", "s008", "s009", "s010", "s011", "s012"))
+wt.sID.cond <- data.frame(treatment= factor(c("C", "C", "C", "H", "H", "H")))
+res <- readRDS("C:/Users/clair/Downloads/SvA10.00.raw.rds")
+
+
+degCalling <- function(res, sampleIDs, conditions){
+  # generate CPM threshold mask, >1CPM in any one sample
+  # extract CPM data for specific sample IDs in input
+  counts.filtered <- res$tm %>% 
+    filter(SampleID %in% sampleIDs$SampleID)
+  # pivot filteredCPM table to wide format
+  counts.wide.filtered <- counts.filtered[c(1,2,5)] %>%
+    pivot_wider(names_from = SampleID, values_from = CPM)
+  # save CPM table
+  write_tsv(counts.wide.filtered, file = paste("CPMtable.", deparse(substitute(sampleIDs)), ".csv"))
+  # filter for any sample with >0.5 CPM
+  counts.CPMmask <- counts.wide.filtered %>%
+    dplyr::filter_at(vars(2:ncol(counts.wide.filtered)), any_vars(.>1))
+  
+  # DEG calling
+  # loading and formatting featureCounts output
+  fc <- res$fcnt
+  fc.filtered <- fc %>%
+    filter(SampleID %in% sampleIDs$SampleID)
+  fc.wide.filtered <- fc.filtered %>%
+    pivot_wider(names_from = SampleID, values_from = ReadCount)
+  fc.wide.filtered <- fc.wide.filtered[, order(names(fc.wide.filtered))] %>%
+    column_to_rownames(var = "gid")
+  
+  # calling DEGs
+  dds <- DESeqDataSetFromMatrix(fc.wide.filtered, conditions, formula(~ treatment))
+  dds <- DESeq(dds)
+  DEGs.res <- results(dds)
+  DEGs.res.ordered <- DEGs.res[order(DEGs.res$padj),]
+  
+  # writing and exporting DEG tables
+  allDEGs.df <- as.data.frame(DEGs.res.ordered)
+  allDEGs.df <- allDEGs.df %>%
+    rownames_to_column(var = "gid")
+  write_tsv(allDEGs.df, file = paste("allDEGs.wt.drm", deparse(substitute(sampleIDs)), ".tsv"))
+  sigDEGs.df <- allDEGs.df %>%
+    subset(padj < 0.05 & abs(log2FoldChange) > 1)
+  
+  sigDEGs.expressed <- merge(counts.CPMmask, sigDEGs.df,
+                             by.x = 'gid', by.y = 'gid')
+  sigDEGs.expressed <- sigDEGs.expressed[, c('gid','log2FoldChange','lfcSE','padj')]
+  write_tsv(sigDEGs.expressed, file = paste("sigDEGs.wt.drm",deparse(substitute(sampleIDs)),".tsv"))
+  
+  # histogram of DEGs, both directions
+  histInput <- sigDEGs.expressed %>%
+    mutate(cond = c("CvH")) %>%
+    mutate(Direction = ifelse(log2FoldChange > 0, 'Up','Down')) %>%
+    group_by(cond, Direction) %>%
+    summarise(DEGs = n()) %>%
+    mutate(DEGs = ifelse(Direction == "Down", DEGs*-1, DEGs))
+  
+  histplot <- histInput %>% 
+    ggplot(aes(x=cond, y=DEGs, fill=Direction)) + 
+    geom_hline(yintercept = 0) + 
+    geom_bar(stat="identity") + 
+    scale_y_continuous(breaks = c(-2000,-1500,-1000,-500,0,500,1000,1500,2000), labels = abs(c(-2000,-1500,-1000,-500,0,500,1000,1500,2000))) + 
+    theme_minimal() + 
+    scale_fill_manual(values = c("blue4","coral4")) + 
+    theme(legend.position = "none", axis.text.x = element_blank(), axis.title.y = element_text(size = 16)) +
+    labs(x = "", y = "Differentially Expressed Genes \n(Control vs Heat)") +
+    geom_text(aes(label = abs(DEGs)), size = 6, colour = "white", vjust = c(-0.5,1.2))
+  
+  ggsave(paste("hist.drm_wt",deparse(substitute(sampleIDs)),".png"), histplot, height = 6, width = 8)
+  
+
+  
+}
+degCalling(res, wt.sIDs, wt.sID.cond)
+
+
+
+
+
+
