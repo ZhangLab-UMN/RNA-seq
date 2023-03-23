@@ -1,0 +1,42 @@
+#!/bin/bash
+
+#SBATCH --time=3:00:00
+#SBATCH --ntasks=8
+#SBATCH --mem=32g
+#SBATCH --tmp=32g
+#SBATCH --mail-type=ALL
+#SBATCH --mail-user=<username>@umn.edu
+
+
+echo "Step 0: Setting up directory structure..."
+mkdir /home/agro5431/<username>/transcriptome_analysis/
+cd /home/agro5431/<username>/transcriptome_analysis/
+
+echo "Step 1: Downloading the file from the SRA..."
+module load sratoolkit/2.8.2
+fastq-dump --split-files -F -Q 33 SRR940252
+
+echo "Step 2: Check the quality of the raw reads..."
+module load fastqc/0.11.7
+fastqc -f fastq  SRR940252_1.fastq
+
+echo "Step 3: Remove the adapter sequences..."
+module load cutadapt/1.18
+cutadapt -a GATCGGAAGAGCACACGTCTGAACTCCAGTCACCAGATCATCTCGTATGCCGTCTTCTGCTTG -a AATGATACGGCGACCACCGAGATCTACACTCTTTCCCTACACGACGCTCTTCCGATCT -f fastq -m 30 --quality-base=33 -o SRR940252_1_cutadapt.fastq SRR940252_1.fastq > SRR940252_cutadapt.log
+
+echo "Step 4: Check the quality of the cleaned reads..."
+fastqc -f fastq  SRR940252_1_cutadapt.fastq
+
+echo "Step 5: Align RNAseq reads to the genome..."
+module load star/2.5.3a
+STAR --genomeDir /home/agro5431/shared/B73_STAR \
+     --runThreadN 8 \
+     --readFilesIn SRR940252_1_cutadapt.fastq \
+     --outFileNamePrefix SRR940252_1_cutadapt_STAR \
+     --outSAMtype BAM SortedByCoordinate \
+     --outSAMunmapped Within \ --outSAMattributes Standard
+
+echo "Step 6: Get transcript abundance..."
+module load htseq/0.7.2
+htseq-count -f bam -s no -t gene -i ID -m union -a 20 SRR940252_1_cutadapt_STARAligned.sortedByCoord.out.bam /home/agro5431/shared/Zea_mays.AGPv4.33.gff3 > htseq_SRR940252.txt
+
