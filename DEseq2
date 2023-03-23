@@ -1,0 +1,76 @@
+# Written by Candy Hirsch
+
+DESeq
+
+#load in libraries
+library(tidyverse)
+library(readxl)
+library(DESeq2)
+library(gplots)
+
+### Set working directory and read in matrix data. In this case, the matrix is a 4hour CMP matrix
+setwd("/Users/clair/Documents/HSF/Maize_4h")
+
+fpkm <- read.delim(file= "maize_matrix_txt", head=T, row.names=1)
+
+### Set up the data
+# Create dataframe with tissues as conditions
+design = data.frame(row.names=colnames(fpkm), condition = c("Maize_4h_heat","Maize_control", "Maize_control", "Maize_4h_heat","Maize_4h_heat","Maize_4h_heat","Maize_4h_heat", "Maize_control", "Maize_control"))
+condition = design$condition
+
+# Create count data set varialble within DESeq2
+cds <- DESeqDataSetFromMatrix(countData = fpkm,
+                              colData = design,
+                              design = ~ condition)
+
+
+# Normalize the data
+cds <- estimateSizeFactors(cds)
+sizeFactors(cds)
+
+cds <- estimateDispersions(cds)
+
+# Create object with normalized values
+norm <- counts(cds, normalized = TRUE)
+
+# Add tissue names to data frame and replace SRA numbers
+# create a vector called tissues - take tissues from condition factor in design df (same order as SRA numbers in norm), denote them as a character object using as.character
+# use names function to geta set of names from tissues and assign row.names from design (SRA numbers that match each tissue/rep) - now each Tissue is assigned to an SRA number in a vector
+# apply tissues as column names of norm
+tissues = as.character(design$condition)
+names(tissues) = row.names(design)
+colnames(norm) = tissues
+
+### Plot correlations of normalized expression levels ###
+# Calculate correlations fromt he normalized matrix
+cor <- cor(norm, use = "pairwise.complete.obs", method = "spearman")
+cor_matrix <- as.matrix(cor,  center = FALSE)
+
+# plot the heatmap
+pdf("heatmap.pdf", pointsize=10, font="Helvetica")
+heatmap.2(cor_matrix,
+          key = TRUE,
+          keysize = 0.8,
+          density.info = "non",
+          trace = "none",
+          dendrogram = "row",
+          col = "redgreen",
+          margin = c(10,10))
+dev.off()
+
+# plot the heirarchical tree
+dist <- as.dist((1-cor)/2)
+pdf(file="tree.pdf", pointsize=9)
+plot(hclust(dist))
+dev.off()
+
+## Test for DE genes ##
+test <- DESeq(cds)
+
+## Write out the test results ##
+res <- results(test)
+
+## Pulling out a specific contrast ##
+heat_control <- results(test, contrast = c("condition", "Maize_4h_heat","Maize_control"))
+nrow(subset(heat_control, padj<0.01 & !(log2FoldChange >= 0.5 & log2FoldChange <= 2)))
+write.table(heat_control, file="maize_4h.txt", sep="\t")
